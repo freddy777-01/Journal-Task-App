@@ -1,0 +1,272 @@
+.journal-editor {
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+	background-color: var(--bg-primary);
+}
+
+.journal-editor.empty {
+	align-items: center;
+	justify-content: center;
+}
+
+.empty-state {
+	text-align: center;
+	color: var(--text-secondary);
+}
+
+.empty-state h2 {
+	font-size: 24px;
+	margin-bottom: 8px;
+	color: var(--text-primary);
+}
+
+.empty-state p {
+	font-size: 16px;
+	opacity: 0.7;
+}
+
+.editor-header {
+	padding: 20px;
+	border-bottom: 1px solid var(--border-color);
+	background-color: var(--bg-secondary);
+}
+
+.editor-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 16px;
+}
+
+.back-btn {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.action-buttons {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.delete-btn {
+	color: #ef4444;
+}
+
+.delete-btn:hover {
+	background-color: #fef2f2;
+	color: #dc2626;
+}
+
+.save-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.entry-meta {
+	display: flex;
+	align-items: center;
+	gap: 24px;
+}
+
+.meta-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--text-secondary);
+}
+
+.date-input,
+.mood-select {
+	padding: 8px 12px;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background-color: var(--bg-primary);
+	color: var(--text-primary);
+	font-size: 14px;
+}
+
+.date-input:focus,
+.mood-select:focus {
+	outline: none;
+	border-color: var(--primary-color);
+}
+
+.editor-content {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow-y: auto;
+	overflow-x: hidden;
+	padding: 20px;
+}
+
+.title-input {
+	font-size: 32px;
+	font-weight: 700;
+	border: none;
+	background: none;
+	color: var(--text-primary);
+	margin-bottom: 20px;
+	padding: 0;
+	outline: none;
+}
+
+.title-input::placeholder {
+	color: var(--text-tertiary);
+}
+
+.tags-section {
+	margin-bottom: 20px;
+}
+
+.tags-input {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.tag-input {
+	flex: 1;
+	padding: 8px 12px;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background-color: var(--bg-secondary);
+	color: var(--text-primary);
+	font-size: 14px;
+}
+
+.tag-input:focus {
+	outline: none;
+	border-color: var(--primary-color);
+}
+
+.tags-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.tag {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	background-color: var(--primary-color);
+	color: white;
+	padding: 4px 8px;
+	border-radius: 12px;
+	font-size: 12px;
+	font-weight: 500;
+}
+
+.tag-remove {
+	background: none;
+	border: none;
+	color: white;
+	cursor: pointer;
+	font-size: 16px;
+	line-height: 1;
+	padding: 0;
+	width: 16px;
+	height: 16px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 50%;
+}
+
+.tag-remove:hover {
+	background-color: rgba(255, 255, 255, 0.2);
+}
+
+.quill-container {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: visible;
+	min-height: 400px;
+}
+
+.quill-editor {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+}
+
+.quill-editor .ql-container {
+	flex: 1;
+	border: none;
+	font-size: var(--editor-font-size);
+	line-height: 1.6;
+}
+
+.quill-editor .ql-editor {
+	padding: 0;
+	min-height: 400px;
+	overflow: visible;
+}
+
+.quill-editor .ql-toolbar {
+	border: none;
+	border-bottom: 1px solid var(--border-color);
+	padding: 12px 0;
+	margin-bottom: 20px;
+}
+
+.quill-editor .ql-toolbar .ql-formats {
+	margin-right: 16px;
+}
+
+.quill-editor .ql-toolbar button {
+	width: 32px;
+	height: 32px;
+	border-radius: 6px;
+	margin-right: 4px;
+}
+
+.quill-editor .ql-toolbar button:hover {
+	background-color: var(--bg-tertiary);
+}
+
+.quill-editor .ql-toolbar button.ql-active {
+	background-color: var(--primary-color);
+	color: white;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+	.editor-header {
+		padding: 16px;
+	}
+
+	.editor-actions {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 12px;
+	}
+
+	.action-buttons {
+		justify-content: space-between;
+	}
+
+	.entry-meta {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 12px;
+	}
+
+	.meta-item {
+		justify-content: space-between;
+	}
+
+	.editor-content {
+		padding: 16px;
+	}
+
+	.title-input {
+		font-size: 24px;
+	}
+}

@@ -1,0 +1,25 @@
+.app {
+	display: flex;
+	height: 100vh;
+	overflow: visible;
+	transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.main-content {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: visible;
+	background-color: var(--bg-primary);
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+	.app {
+		flex-direction: column;
+	}
+
+	.main-content {
+		height: calc(100vh - 60px);
+	}
+}
