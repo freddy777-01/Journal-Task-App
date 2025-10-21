@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
-	BookOpen,
 	Plus,
 	Calendar,
 	Search,
@@ -13,6 +12,7 @@ import {
 	ChevronRight,
 } from "lucide-react";
 import { Entry } from "../types";
+import { useTheme } from "../hooks/useTheme";
 import "./Sidebar.css";
 
 interface SidebarProps {
@@ -37,6 +37,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 	const navigate = useNavigate();
 	const location = useLocation();
 	const [searchTerm, setSearchTerm] = useState("");
+	const { resolvedTheme } = useTheme();
 
 	const filteredEntries = entries.filter(
 		(entry) =>
@@ -75,7 +76,13 @@ const Sidebar: React.FC<SidebarProps> = ({
 		<div className={`sidebar ${isCollapsed ? "collapsed" : ""}`}>
 			<div className="sidebar-header">
 				<div className="logo">
-					<BookOpen size={24} />
+					<img
+						src={`/logo-1-${resolvedTheme}.png`}
+						alt="Diary"
+						width={24}
+						height={24}
+						style={{ display: "block" }}
+					/>
 					{!isCollapsed && <h1>Diary</h1>}
 				</div>
 				<button

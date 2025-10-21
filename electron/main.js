@@ -61,18 +61,64 @@ const fs = require("fs");
 })();
 
 let mainWindow = null;
+let splashWindow = null;
+let splashShownAt = 0;
+let mainShown = false;
+const SPLASH_MIN_MS = 2500; // keep splash visible at least 2.5s
+// TEMP: Splash-only mode for visual verification. Set to false to restore normal startup.
+const SPLASH_ONLY = false;
 let db;
 let cloudService;
 let autoSyncInterval = null;
 
+function createSplashWindow() {
+	const isDev = process.env.NODE_ENV === "development";
+	const splashPath = isDev
+		? path.join(__dirname, "../public/splash.html")
+		: path.join(__dirname, "../dist/splash.html");
+
+	splashWindow = new BrowserWindow({
+		width: 360,
+		height: 300,
+		resizable: false,
+		movable: true,
+		frame: false,
+		show: false,
+		transparent: false,
+		alwaysOnTop: true,
+		center: true,
+		backgroundColor: "#00000000",
+		webPreferences: {
+			contextIsolation: true,
+			nodeIntegration: false,
+		},
+	});
+
+	splashWindow.once("ready-to-show", () => splashWindow?.show());
+	splashWindow.once("ready-to-show", () => {
+		splashShownAt = Date.now();
+	});
+	splashWindow.loadFile(splashPath).catch(() => splashWindow?.show());
+}
+
 const createWindow = () => {
 	console.log("Creating Electron window...");
+
+	// Detect system theme and choose appropriate icon
+	const nativeTheme = require("electron").nativeTheme;
+	const isDarkMode = nativeTheme.shouldUseDarkColors;
+	const iconName = isDarkMode ? "logo-1-dark" : "logo-1-light";
+	const iconPath =
+		process.platform === "win32"
+			? path.join(__dirname, `../public/${iconName}.ico`)
+			: path.join(__dirname, `../public/${iconName}.png`);
 
 	mainWindow = new BrowserWindow({
 		width: 1200,
 		height: 800,
 		minWidth: 800,
 		minHeight: 600,
+		icon: iconPath, // Add this line
 		webPreferences: {
 			nodeIntegration: false,
 			contextIsolation: true,
@@ -93,10 +139,33 @@ const createWindow = () => {
 		mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
 	}
 
-	mainWindow.once("ready-to-show", () => {
-		console.log("Window ready to show");
-		mainWindow?.show();
-	});
+	// Show the main window after content fully loads and after minimum splash time
+	const showMainAfterMinDelay = () => {
+		const elapsed = Date.now() - (splashShownAt || Date.now());
+		const wait = Math.max(0, SPLASH_MIN_MS - elapsed);
+		setTimeout(() => {
+			if (!mainShown) {
+				console.log("Showing main window");
+				mainWindow?.show();
+				mainShown = true;
+			}
+			if (splashWindow && !splashWindow.isDestroyed()) {
+				splashWindow.close();
+				splashWindow = null;
+			}
+		}, wait);
+	};
+
+	// Prefer did-finish-load to avoid flashing partially rendered UI
+	mainWindow.webContents.once("did-finish-load", showMainAfterMinDelay);
+
+	// Fallback: if load takes too long, show anyway after a timeout
+	setTimeout(() => {
+		if (!mainShown) {
+			console.warn("did-finish-load timeout; showing main window");
+			showMainAfterMinDelay();
+		}
+	}, 15000);
 
 	mainWindow.on("closed", () => {
 		console.log("Window closed");
@@ -217,11 +286,18 @@ app.whenReady().then(() => {
 	// Start auto-sync if enabled
 	startAutoSync();
 
-	createWindow();
+	// Show splash first, then main window
+	createSplashWindow();
+	if (!SPLASH_ONLY) {
+		createWindow();
+	}
 
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) {
-			createWindow();
+			createSplashWindow();
+			if (!SPLASH_ONLY) {
+				createWindow();
+			}
 		}
 	});
 });
