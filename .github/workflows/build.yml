@@ -1,110 +1,75 @@
-name: Build and Release
+name: Build Desktop Apps
 
 on:
+  # Publish builds when pushing a version tag like v1.2.3
   push:
     tags:
       - "v*"
+  # Allow manual runs without publishing
   workflow_dispatch:
+
+permissions:
+  contents: write  # required to create GitHub Releases on tag builds
 
 jobs:
   build:
+    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    env:
+      # Speeds up Electron downloads across runs
+      ELECTRON_CACHE: ${{ runner.temp }}/electron
+      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder
+      # If you are NOT code signing, prevent macOS signing prompts
+      CSC_IDENTITY_AUTO_DISCOVERY: false
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: 20
           cache: "npm"
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build application
-        run: npm run build
+      - name: Build renderer (Vite)
+        run: npm run build:vite
 
-      - name: Build Electron app (Windows)
-        if: matrix.os == 'windows-latest'
-        run: npm run build:electron
+      # Build per-OS using your scripts
+      - name: Build Windows
+        if: runner.os == 'Windows'
+        run: npm run build:win
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Only set GH_TOKEN on tag builds so electron-builder publishes
+          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && secrets.GH_TOKEN || '' }}
 
-      - name: Build Electron app (macOS)
-        if: matrix.os == 'macos-latest'
-        run: npm run build:electron
+      - name: Build macOS
+        if: runner.os == 'macOS'
+        run: npm run build:mac
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && secrets.GH_TOKEN || '' }}
+          # If notarizing/signing, you'll also provide the Apple creds as secrets (see notes below)
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Build Electron app (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: npm run build:electron
+      - name: Build Linux
+        if: runner.os == 'Linux'
+        run: npm run build:linux
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && secrets.GH_TOKEN || '' }}
 
-      - name: Upload Windows artifacts
-        if: matrix.os == 'windows-latest'
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-build
-          path: release/
-
-      - name: Upload macOS artifacts
-        if: matrix.os == 'macos-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-build
-          path: release/
-
-      - name: Upload Linux artifacts
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-build
-          path: release/
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-build
-          path: ./artifacts/windows/
-
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-build
-          path: ./artifacts/macos/
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-build
-          path: ./artifacts/linux/
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            ./artifacts/windows/*
-            ./artifacts/macos/*
-            ./artifacts/linux/*
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: ${{ runner.os }}-artifacts
+          path: release/**
+          if-no-files-found: ignore
