@@ -19,8 +19,6 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
 
     env:
-      ELECTRON_CACHE: ${{ runner.temp }}/electron
-      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder
       CSC_IDENTITY_AUTO_DISCOVERY: false
 
     steps:
@@ -43,19 +41,19 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: npm run build:win
         env:
-          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && secrets.GH_TOKEN || '' }}
+          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && github.token || '' }}
 
       - name: Build macOS
         if: matrix.os == 'macos-latest'
         run: npm run build:mac
         env:
-          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && secrets.GH_TOKEN || '' }}
+          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && github.token || '' }}
 
       - name: Build Linux
         if: matrix.os == 'ubuntu-latest'
         run: npm run build:linux
         env:
-          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && secrets.GH_TOKEN || '' }}
+          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && github.token || '' }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
