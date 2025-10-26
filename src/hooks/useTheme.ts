@@ -53,8 +53,31 @@ export const useTheme = () => {
 
 		mediaQuery.addEventListener("change", handleSystemChange);
 
+		// Listen for app-wide theme changes triggered by other hook instances
+		const handleAppThemeChanged = (ev: Event) => {
+			try {
+				const custom = ev as CustomEvent<"light" | "dark" | "system">;
+				const newTheme = custom.detail;
+				if (!newTheme) return;
+				setTheme(newTheme);
+				if (newTheme === "system") {
+					setResolvedTheme(getSystemTheme());
+				} else {
+					setResolvedTheme(newTheme);
+				}
+			} catch {}
+		};
+		window.addEventListener(
+			"app-theme-changed" as any,
+			handleAppThemeChanged as any
+		);
+
 		return () => {
 			mediaQuery.removeEventListener("change", handleSystemChange);
+			window.removeEventListener(
+				"app-theme-changed" as any,
+				handleAppThemeChanged as any
+			);
 		};
 	}, [theme]);
 
@@ -71,6 +94,13 @@ export const useTheme = () => {
 		} catch (error) {
 			console.error("Failed to save theme:", error);
 		}
+
+		// Broadcast to other hook instances so they update immediately
+		try {
+			window.dispatchEvent(
+				new CustomEvent("app-theme-changed", { detail: newTheme })
+			);
+		} catch {}
 	};
 
 	const toggleTheme = () => {

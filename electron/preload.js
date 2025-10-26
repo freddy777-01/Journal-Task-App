@@ -19,6 +19,19 @@ const updateAPI = {
 	onUpdateDownloaded: (callback) => {
 		ipcRenderer.on("update-downloaded", callback);
 	},
+	// New: additional update bridge
+	onUpdateNotAvailable: (callback) => {
+		ipcRenderer.on("update-not-available", callback);
+	},
+	onDownloadProgress: (callback) => {
+		ipcRenderer.on("update-download-progress", (_evt, payload) =>
+			callback?.(payload)
+		);
+	},
+	onUpdateError: (callback) => {
+		ipcRenderer.on("update-error", (_evt, message) => callback?.(message));
+	},
+	checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
 	restartApp: () => ipcRenderer.invoke("restart-app"),
 };
 

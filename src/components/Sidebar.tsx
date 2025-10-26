@@ -14,6 +14,7 @@ import {
 import { Entry } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import "./Sidebar.css";
+// Images are served from the public/ folder; use Vite base to build URL at runtime
 
 interface SidebarProps {
 	entries: Entry[];
@@ -38,6 +39,12 @@ const Sidebar: React.FC<SidebarProps> = ({
 	const location = useLocation();
 	const [searchTerm, setSearchTerm] = useState("");
 	const { resolvedTheme } = useTheme();
+
+	// Build a base-aware logo URL that works in dev and production
+	const baseUrl = (import.meta as any).env?.BASE_URL ?? "./";
+	const logoSrc = `${baseUrl}logo-1-${
+		resolvedTheme === "dark" ? "dark" : "light"
+	}.png`;
 
 	const filteredEntries = entries.filter(
 		(entry) =>
@@ -77,7 +84,8 @@ const Sidebar: React.FC<SidebarProps> = ({
 			<div className="sidebar-header">
 				<div className="logo">
 					<img
-						src={`/logo-1-${resolvedTheme}.png`}
+						key={resolvedTheme}
+						src={`${logoSrc}?v=${resolvedTheme}`}
 						alt="Diary"
 						width={24}
 						height={24}

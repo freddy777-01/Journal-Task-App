@@ -70,6 +70,8 @@ const SPLASH_ONLY = false;
 let db;
 let cloudService;
 let autoSyncInterval = null;
+// Guard to prevent overlapping update checks
+let isCheckingUpdates = false;
 
 function createSplashWindow() {
 	const isDev = process.env.NODE_ENV === "development";
@@ -291,6 +293,25 @@ app.whenReady().then(() => {
 	if (!SPLASH_ONLY) {
 		createWindow();
 	}
+
+	// If an update was installed on the previous run, notify renderer after window loads
+	try {
+		const flagPath = path.join(
+			app.getPath("userData"),
+			"update-installed.flag"
+		);
+		if (fs.existsSync(flagPath)) {
+			fs.unlinkSync(flagPath);
+			if (mainWindow) {
+				mainWindow.webContents.once("did-finish-load", () => {
+					try {
+						const version = app.getVersion ? app.getVersion() : undefined;
+						mainWindow?.webContents.send("update-installed", version);
+					} catch {}
+				});
+			}
+		}
+	} catch {}
 
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) {
@@ -533,24 +554,84 @@ ipcMain.handle("import-entries", async () => {
 });
 
 // Auto-updater
-if (process.env.NODE_ENV === "production") {
+if (process.env.NODE_ENV === "production" && process.platform !== "darwin") {
 	autoUpdater.checkForUpdatesAndNotify();
 }
 
 autoUpdater.on("update-available", () => {
+	// Release update check lock
+	isCheckingUpdates = false;
 	if (mainWindow) {
 		mainWindow.webContents.send("update-available");
 	}
 });
 
 autoUpdater.on("update-downloaded", () => {
+	// Release update check lock
+	isCheckingUpdates = false;
 	if (mainWindow) {
 		mainWindow.webContents.send("update-downloaded");
 	}
 });
 
+// Forward additional update events
+autoUpdater.on("update-not-available", () => {
+	// Release update check lock
+	isCheckingUpdates = false;
+	if (mainWindow) {
+		mainWindow.webContents.send("update-not-available");
+	}
+});
+
+autoUpdater.on("download-progress", (progressObj) => {
+	if (mainWindow) {
+		mainWindow.webContents.send("update-download-progress", progressObj);
+	}
+});
+
+autoUpdater.on("error", (err) => {
+	console.error("AutoUpdater error:", err);
+	// Release update check lock
+	isCheckingUpdates = false;
+	if (mainWindow) {
+		mainWindow.webContents.send("update-error", String(err?.message || err));
+	}
+});
+
 ipcMain.handle("restart-app", () => {
+	try {
+		const flagPath = path.join(
+			app.getPath("userData"),
+			"update-installed.flag"
+		);
+		fs.writeFileSync(flagPath, String(Date.now()));
+	} catch {}
 	autoUpdater.quitAndInstall();
+});
+
+// Allow renderer to manually trigger a check
+ipcMain.handle("check-for-updates", async () => {
+	// Disable manual update checks on macOS when unsigned to avoid user confusion
+	if (process.platform === "darwin") {
+		try {
+			if (mainWindow) {
+				mainWindow.webContents.send("update-not-available");
+			}
+		} catch {}
+		return false;
+	}
+	try {
+		if (isCheckingUpdates) {
+			return true; // ignore concurrent clicks
+		}
+		isCheckingUpdates = true;
+		await autoUpdater.checkForUpdates();
+		return true;
+	} catch (e) {
+		console.error("checkForUpdates failed:", e);
+		isCheckingUpdates = false;
+		return false;
+	}
 });
 
 // ==================== CLOUD SYNC IPC HANDLERS ====================

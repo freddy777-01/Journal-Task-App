@@ -32,3 +32,13 @@ A modern, cross-platform journal/diary desktop application built with Electron, 
 ```
 
 ```
+
+## Installing Unsigned Builds
+
+This app ships unsigned by default:
+
+- Windows: SmartScreen may warn. Click "More info" → "Run anyway".
+- macOS: Gatekeeper may block opening. Right‑click the app → Open → Open. Or go to System Settings → Privacy & Security → Open Anyway.
+- Linux: AppImage may need execute permissions: `chmod +x Diary-*.AppImage`.
+
+Note: Auto‑updates on macOS may not work reliably without signing/notarization.

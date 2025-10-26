@@ -17,19 +17,36 @@ export interface DatabaseAPI {
 }
 
 export interface FileAPI {
-	exportEntries: () => Promise<string | null>;
+	exportEntries: (format?: "json" | "html") => Promise<string | null>;
 	importEntries: () => Promise<number | null>;
 }
 
 export interface UpdateAPI {
 	onUpdateAvailable: (callback: () => void) => void;
 	onUpdateDownloaded: (callback: () => void) => void;
+	onUpdateInstalled?: (callback: (version?: string) => void) => void;
 	restartApp: () => Promise<void>;
+	checkForUpdates: () => Promise<boolean>;
+	onUpdateNotAvailable: (callback: () => void) => void;
+	onDownloadProgress: (
+		callback: (progress: {
+			percent?: number;
+			transferred?: number;
+			total?: number;
+			bytesPerSecond?: number;
+		}) => void
+	) => void;
+	onUpdateError: (callback: (message: string) => void) => void;
 }
 
 export interface SettingsAPI {
 	getSetting: (key: string) => Promise<string | null>;
 	setSetting: (key: string, value: string) => Promise<void>;
+}
+
+export interface SystemAPI {
+	getPlatform: () => Promise<string>;
+	openExternal: (url: string) => Promise<boolean>;
 }
 
 // Cloud Sync types
@@ -47,9 +64,7 @@ export interface CloudStatus {
 
 export interface CloudAPI {
 	getStatus: () => Promise<CloudStatus>;
-	getSyncHistory?: (
-		limit?: number
-	) => Promise<
+	getSyncHistory?: (limit?: number) => Promise<
 		Array<{
 			id: number;
 			provider: string;
@@ -112,7 +127,8 @@ const databaseAPI: DatabaseAPI = {
 };
 
 const fileAPI: FileAPI = {
-	exportEntries: () => ipcRenderer.invoke("export-entries"),
+	exportEntries: (format?: "json" | "html") =>
+		ipcRenderer.invoke("export-entries", format ?? "json"),
 	importEntries: () => ipcRenderer.invoke("import-entries"),
 };
 
@@ -123,13 +139,36 @@ const updateAPI: UpdateAPI = {
 	onUpdateDownloaded: (callback: () => void) => {
 		ipcRenderer.on("update-downloaded", callback);
 	},
+	onUpdateInstalled: (callback: (version?: string) => void) => {
+		ipcRenderer.on("update-installed", (_evt, version) => callback?.(version));
+	},
 	restartApp: () => ipcRenderer.invoke("restart-app"),
+	checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
+	onUpdateNotAvailable: (callback: () => void) => {
+		ipcRenderer.on("update-not-available", callback);
+	},
+	onDownloadProgress: (callback) => {
+		ipcRenderer.on("update-download-progress", (_evt, payload) =>
+			callback(payload)
+		);
+	},
+	onUpdateError: (callback) => {
+		ipcRenderer.on("update-error", (_evt, message) => callback(message));
+	},
 };
 
 const settingsAPI: SettingsAPI = {
 	getSetting: (key: string) => ipcRenderer.invoke("get-setting", key),
 	setSetting: (key: string, value: string) =>
 		ipcRenderer.invoke("set-setting", key, value),
+};
+
+const systemAPI: SystemAPI = {
+	getPlatform: async () => {
+		// Use a synchronous hint via userAgent when possible? Keep IPC for consistency
+		return process.platform;
+	},
+	openExternal: (url: string) => ipcRenderer.invoke("open-external-url", url),
 };
 
 const cloudAPI: CloudAPI = {
@@ -193,6 +232,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	update: updateAPI,
 	settings: settingsAPI,
 	cloud: cloudAPI,
+	system: systemAPI,
 });
 
 declare global {
@@ -203,6 +243,7 @@ declare global {
 			update: UpdateAPI;
 			settings: SettingsAPI;
 			cloud: CloudAPI;
+			system: SystemAPI;
 		};
 	}
 }

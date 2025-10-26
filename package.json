@@ -37,6 +37,8 @@
         ],
         "mac": {
             "category": "public.app-category.lifestyle",
+            "identity": null,
+            "gatekeeperAssess": false,
             "target": [
                 {
                     "target": "dmg",

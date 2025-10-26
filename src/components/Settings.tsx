@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
 	Moon,
 	Sun,
@@ -15,6 +15,7 @@ import { useTheme } from "../hooks/useTheme";
 import { useSettings } from "../hooks/useSettings";
 import CloudSync from "./CloudSync";
 import "./Settings.css";
+import Toast from "./Toast";
 
 const Settings: React.FC = () => {
 	const { theme, setThemeMode } = useTheme();
@@ -22,15 +23,63 @@ const Settings: React.FC = () => {
 		useSettings();
 	const [isExporting, setIsExporting] = useState(false);
 	const [isImporting, setIsImporting] = useState(false);
+	// App update UI state
 	const [updateAvailable, setUpdateAvailable] = useState(false);
+	const [updateDownloaded, setUpdateDownloaded] = useState(false);
+	const [updateChecking, setUpdateChecking] = useState(false);
+	const [updateError, setUpdateError] = useState<string | null>(null);
+	const [downloadProgress, setDownloadProgress] = useState<number>(0);
+	// Removed inline message in favor of toasts
+	const checkTimerRef = useRef<number | null>(null);
+	const [showToast, setShowToast] = useState<{
+		message: string;
+		type: "info" | "success" | "error";
+	} | null>(null);
 
 	useEffect(() => {
-		// Listen for update notifications
-		if (window.electronAPI?.update) {
-			window.electronAPI.update.onUpdateAvailable(() => {
-				setUpdateAvailable(true);
-			});
-		}
+		// Listen for updater events
+		if (!window.electronAPI?.update) return;
+		const u = window.electronAPI.update;
+		u.onUpdateAvailable(() => {
+			setUpdateAvailable(true);
+			setUpdateError(null);
+			if (checkTimerRef.current) {
+				window.clearTimeout(checkTimerRef.current);
+				checkTimerRef.current = null;
+			}
+		});
+		u.onUpdateDownloaded(() => {
+			setUpdateDownloaded(true);
+			setUpdateChecking(false);
+			setUpdateError(null);
+			if (checkTimerRef.current) {
+				window.clearTimeout(checkTimerRef.current);
+				checkTimerRef.current = null;
+			}
+		});
+		u.onUpdateNotAvailable?.(() => {
+			setUpdateAvailable(false);
+			setUpdateDownloaded(false);
+			setDownloadProgress(0);
+			setUpdateChecking(false);
+			setShowToast({ message: "No updates available", type: "info" });
+			if (checkTimerRef.current) {
+				window.clearTimeout(checkTimerRef.current);
+				checkTimerRef.current = null;
+			}
+		});
+		u.onDownloadProgress?.((p) => {
+			const percent = typeof p?.percent === "number" ? p.percent : 0;
+			setDownloadProgress(percent);
+		});
+		u.onUpdateError?.((message) => {
+			setUpdateError(message || "Update error");
+			setUpdateChecking(false);
+			if (checkTimerRef.current) {
+				window.clearTimeout(checkTimerRef.current);
+				checkTimerRef.current = null;
+			}
+		});
 	}, []);
 
 	const handleExport = async (format: "json" | "html" = "json") => {
@@ -76,6 +125,43 @@ const Settings: React.FC = () => {
 		if (window.electronAPI?.update) {
 			await window.electronAPI.update.restartApp();
 		}
+	};
+
+	const handleCheckForUpdates = async () => {
+		if (!window.electronAPI?.update) return;
+		if (typeof window.electronAPI.update.checkForUpdates !== "function") {
+			setUpdateError(
+				"Update bridge not loaded yet. Please fully restart the app to reload the preload script, then try again."
+			);
+			return;
+		}
+		setUpdateChecking(true);
+		setUpdateError(null);
+		setDownloadProgress(0);
+		try {
+			const ok = await window.electronAPI.update.checkForUpdates();
+			if (!ok) {
+				setUpdateChecking(false);
+				setUpdateError(
+					"Unable to start update check. Updates are typically available in packaged builds."
+				);
+			}
+		} catch (e) {
+			setUpdateChecking(false);
+			setUpdateError(String((e as any)?.message || e));
+		}
+
+		// Fallback timeout: end checking and show message if nothing arrives
+		if (checkTimerRef.current) {
+			window.clearTimeout(checkTimerRef.current);
+		}
+		checkTimerRef.current = window.setTimeout(() => {
+			setUpdateChecking(false);
+			if (!updateAvailable && !updateDownloaded) {
+				setShowToast({ message: "No updates available", type: "info" });
+			}
+			checkTimerRef.current = null;
+		}, 20000);
 	};
 
 	const fontOptions = [
@@ -268,16 +354,48 @@ const Settings: React.FC = () => {
 							<h3>App Updates</h3>
 							<p>Keep your app up to date with the latest features</p>
 						</div>
-						{updateAvailable ? (
-							<button className="btn btn-primary" onClick={handleUpdate}>
-								<RefreshCw size={16} />
-								Update Available
-							</button>
-						) : (
-							<div className="info-badge">
-								<RefreshCw size={16} />
-								Up to date
+						<div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+							{updateDownloaded ? (
+								<button className="btn btn-primary" onClick={handleUpdate}>
+									<RefreshCw size={16} /> Restart to Update
+								</button>
+							) : updateAvailable ? (
+								<div className="info-badge" title="Downloading update…">
+									<RefreshCw size={16} /> Downloading…{" "}
+									{Math.round(downloadProgress)}%
+								</div>
+							) : (
+								<>
+									<button
+										className="btn btn-secondary"
+										onClick={handleCheckForUpdates}
+										disabled={updateChecking}
+									>
+										<RefreshCw size={16} />
+										{updateChecking ? "Checking…" : "Check for Updates"}
+									</button>
+									{!updateChecking && (
+										<div className="info-badge">
+											<RefreshCw size={16} /> Up to date
+										</div>
+									)}
+								</>
+							)}
+						</div>
+						{updateError && (
+							<div
+								className="error-text"
+								style={{ color: "#ef4444", marginTop: 6 }}
+							>
+								{updateError}
 							</div>
+						)}
+						{showToast && (
+							<Toast
+								message={showToast.message}
+								type={showToast.type}
+								onClose={() => setShowToast(null)}
+							/>
 						)}
 					</div>
 				</div>

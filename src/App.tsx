@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import {
 	BrowserRouter as Router,
 	Routes,
@@ -15,18 +15,47 @@ import { useTheme } from "./hooks/useTheme";
 import { useSettings } from "./hooks/useSettings";
 import { Entry } from "./types";
 import "./App.css";
+import Toast from "./components/Toast";
 
 function AppContent() {
 	const [entries, setEntries] = useState<Entry[]>([]);
 	const [selectedEntry, setSelectedEntry] = useState<Entry | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
 	const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-	const { resolvedTheme } = useTheme();
+	useTheme();
 	const { settings, updateSidebarCollapsed } = useSettings();
 	const navigate = useNavigate();
+	const [toast, setToast] = useState<{
+		message: string;
+		type?: "info" | "success" | "error";
+	} | null>(null);
 
 	useEffect(() => {
 		loadEntries();
+	}, []);
+
+	// On app open: on macOS, show a one-time toast guiding manual download; elsewhere, auto-check is handled in main (prod)
+	useEffect(() => {
+		const platform = process.platform; // available in preload TS as we exposed, but nodeIntegration is off; fallback to platform check in main flow
+		if (platform === "darwin") {
+			setTimeout(() => {
+				setToast({
+					message:
+						"Updates on macOS require a fresh download from the website.",
+					type: "info",
+				});
+			}, 800);
+		}
+
+		// Listen for update installed event (sent on next launch after installing)
+		try {
+			window.electronAPI?.update?.onUpdateInstalled?.((version?: string) => {
+				setToast({
+					message: `Update installed${version ? ` (v${version})` : ""}.`,
+					type: "success",
+				});
+			});
+		} catch {}
 	}, []);
 
 	// Load sidebar collapsed state from settings
@@ -172,6 +201,13 @@ function AppContent() {
 					<Route path="/settings" element={<Settings />} />
 				</Routes>
 			</main>
+			{toast && (
+				<Toast
+					message={toast.message}
+					type={toast.type}
+					onClose={() => setToast(null)}
+				/>
+			)}
 		</div>
 	);
 }

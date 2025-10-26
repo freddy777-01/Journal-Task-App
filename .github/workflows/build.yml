@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build Desktop Apps
 
 on:
   push:
@@ -6,105 +6,60 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
+    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
 
+    env:
+      ELECTRON_CACHE: ${{ runner.temp }}/electron
+      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
-          cache: "npm"
+          node-version: 20
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build application
-        run: npm run build
+      - name: Build renderer (Vite)
+        run: npm run build:vite
 
-      - name: Build Electron app (Windows)
+      - name: Build Windows
         if: matrix.os == 'windows-latest'
-        run: npm run build:electron
+        run: npm run build:win
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && secrets.GH_TOKEN || '' }}
 
-      - name: Build Electron app (macOS)
+      - name: Build macOS
         if: matrix.os == 'macos-latest'
-        run: npm run build:electron
+        run: npm run build:mac
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && secrets.GH_TOKEN || '' }}
 
-      - name: Build Electron app (Linux)
+      - name: Build Linux
         if: matrix.os == 'ubuntu-latest'
-        run: npm run build:electron
+        run: npm run build:linux
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && secrets.GH_TOKEN || '' }}
 
-      - name: Upload Windows artifacts
-        if: matrix.os == 'windows-latest'
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-build
-          path: release/
-
-      - name: Upload macOS artifacts
-        if: matrix.os == 'macos-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-build
-          path: release/
-
-      - name: Upload Linux artifacts
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-build
-          path: release/
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-build
-          path: ./artifacts/windows/
-
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-build
-          path: ./artifacts/macos/
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-build
-          path: ./artifacts/linux/
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            ./artifacts/windows/*
-            ./artifacts/macos/*
-            ./artifacts/linux/*
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: ${{ matrix.os }}-artifacts
+          path: release/**
+          if-no-files-found: ignore
