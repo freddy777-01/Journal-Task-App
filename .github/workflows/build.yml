@@ -1,11 +1,9 @@
 name: Build Desktop Apps
 
 on:
-  # Publish builds when pushing a version tag like v1.2.3
   push:
     tags:
       - "v*"
-  # Allow manual runs without publishing
   workflow_dispatch:
 
 permissions:
