@@ -39,7 +39,10 @@ jobs:
 
       - name: Build Windows (tag publish)
         if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
-        run: npm run build:win
+        run: |
+          $env:EP_DRAFT = 'false'
+          if ($env:GITHUB_REF -match '-beta' -or $env:GITHUB_REF -match '-alpha') { $env:EP_PRE_RELEASE = 'true' }
+          npm run build:win
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
@@ -49,7 +52,10 @@ jobs:
 
       - name: Build macOS (tag publish)
         if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/')
-        run: npm run build:mac
+        run: |
+          export EP_DRAFT=false
+          if [[ "$GITHUB_REF" == *-beta* || "$GITHUB_REF" == *-alpha* ]]; then export EP_PRE_RELEASE=true; fi
+          npm run build:mac
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
@@ -59,7 +65,10 @@ jobs:
 
       - name: Build Linux (tag publish)
         if: matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/')
-        run: npm run build:linux
+        run: |
+          export EP_DRAFT=false
+          if [[ "$GITHUB_REF" == *-beta* || "$GITHUB_REF" == *-alpha* ]]; then export EP_PRE_RELEASE=true; fi
+          npm run build:linux
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 

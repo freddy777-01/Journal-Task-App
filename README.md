@@ -42,3 +42,26 @@ This app ships unsigned by default:
 - Linux: AppImage may need execute permissions: `chmod +x Diary-*.AppImage`.
 
 Note: Auto‑updates on macOS may not work reliably without signing/notarization.
+
+## Release and Icons
+
+- App icons:
+  - Windows: `public/logo-1-light.ico` is used by default. For higher quality, replace with `build/icons/win/icon.ico` and set `build.win.icon` accordingly.
+  - macOS: `public/logo-1-light.png` is used by default. For best results, create `build/icons/mac/icon.icns` and set `build.mac.icon`.
+  - Linux: uses `public/logo-1-light.png` or PNGs in `build/icons/png/`.
+  - See `build/icons/**/README.txt` for size and generation tips.
+
+### Tag and publish (PowerShell)
+
+Create a version tag to trigger release publishing on CI:
+
+1. Update `package.json` version.
+2. Commit your changes.
+3. Create and push a tag:
+
+```
+git tag v1.0.1
+git push origin HEAD ; git push origin --tags
+```
+
+Use prerelease tags like `v1.1.0-beta.1` for beta channels.

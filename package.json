@@ -40,6 +40,7 @@
             "category": "public.app-category.lifestyle",
             "identity": null,
             "gatekeeperAssess": false,
+            "icon": "public/logo-1-light.png",
             "target": [
                 {
                     "target": "dmg",
@@ -51,6 +52,7 @@
             ]
         },
         "win": {
+            "icon": "public/logo-1-light.ico",
             "target": [
                 {
                     "target": "nsis",
@@ -62,6 +64,7 @@
             ]
         },
         "linux": {
+            "icon": "public/logo-1-light.png",
             "target": [
                 {
                     "target": "AppImage",
@@ -78,8 +81,7 @@
             "createStartMenuShortcut": true
         },
         "publish": {
-            "provider": "github",
-            "releaseType": "release"
+            "provider": "github"
         }
     },
     "devDependencies": {

@@ -5,17 +5,21 @@ directories:
 files:
   - dist/**/*
   - dist-electron/**/*
+  - electron/**/*
   - node_modules/**/*
 mac:
   category: public.app-category.lifestyle
+  icon: public/logo-1-light.png
   target:
     - target: dmg
       arch: [x64, arm64]
 win:
+  icon: public/logo-1-light.ico
   target:
     - target: nsis
       arch: [x64, ia32]
 linux:
+  icon: public/logo-1-light.png
   target:
     - target: AppImage
       arch: [x64]
