@@ -37,23 +37,35 @@ jobs:
       - name: Build renderer (Vite)
         run: npm run build:vite
 
-      - name: Build Windows
-        if: matrix.os == 'windows-latest'
+      - name: Build Windows (tag publish)
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
         run: npm run build:win
         env:
-          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && github.token || '' }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
-      - name: Build macOS
-        if: matrix.os == 'macos-latest'
+      - name: Build Windows (no publish)
+        if: matrix.os == 'windows-latest' && !startsWith(github.ref, 'refs/tags/')
+        run: npx electron-builder --win --publish never
+
+      - name: Build macOS (tag publish)
+        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/')
         run: npm run build:mac
         env:
-          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && github.token || '' }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
-      - name: Build Linux
-        if: matrix.os == 'ubuntu-latest'
+      - name: Build macOS (no publish)
+        if: matrix.os == 'macos-latest' && !startsWith(github.ref, 'refs/tags/')
+        run: npx electron-builder --mac --publish never
+
+      - name: Build Linux (tag publish)
+        if: matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/')
         run: npm run build:linux
         env:
-          GH_TOKEN: ${{ startsWith(github.ref, 'refs/tags/') && github.token || '' }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Build Linux (no publish)
+        if: matrix.os == 'ubuntu-latest' && !startsWith(github.ref, 'refs/tags/')
+        run: npx electron-builder --linux --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
