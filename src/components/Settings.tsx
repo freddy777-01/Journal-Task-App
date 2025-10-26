@@ -36,6 +36,24 @@ const Settings: React.FC = () => {
 		type: "info" | "success" | "error";
 	} | null>(null);
 
+	// macOS-only download helper
+	const isMac =
+		typeof navigator !== "undefined" && /mac/i.test(navigator.platform || "");
+
+	const openLatestDownload = async () => {
+		const url =
+			"https://github.com/freddy777-01/Journal-Task-App/releases/latest";
+		try {
+			if (window.electronAPI?.cloud?.openExternalUrl) {
+				await window.electronAPI.cloud.openExternalUrl(url);
+				return;
+			}
+			window.open(url, "_blank", "noopener,noreferrer");
+		} catch {
+			window.open(url, "_blank", "noopener,noreferrer");
+		}
+	};
+
 	useEffect(() => {
 		// Listen for updater events
 		if (!window.electronAPI?.update) return;
@@ -398,6 +416,23 @@ const Settings: React.FC = () => {
 							/>
 						)}
 					</div>
+
+					{isMac && (
+						<div className="setting-item" style={{ marginTop: 8 }}>
+							<div className="setting-info">
+								<h3>macOS Updates</h3>
+								<p>
+									On macOS, please download the latest version from the website.
+								</p>
+							</div>
+							<button
+								className="btn btn-secondary"
+								onClick={openLatestDownload}
+							>
+								<RefreshCw size={16} /> Download Latest (Website)
+							</button>
+						</div>
+					)}
 				</div>
 			</div>
 		</div>
