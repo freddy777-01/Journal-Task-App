@@ -33,6 +33,7 @@
         "files": [
             "dist/**/*",
             "dist-electron/**/*",
+            "electron/**/*",
             "node_modules/**/*"
         ],
         "mac": {
