@@ -8,15 +8,66 @@ console.log("🚀 Starting build process...\n");
 
 // Clean previous builds
 console.log("🧹 Cleaning previous builds...");
-if (fs.existsSync("dist")) {
-	fs.rmSync("dist", { recursive: true, force: true });
+
+function safeRemove(targetPath) {
+	if (!fs.existsSync(targetPath)) return;
+	// Retry a few times in case of transient locks (Windows EBUSY)
+	const retries = 3;
+	for (let i = 0; i < retries; i++) {
+		try {
+			fs.rmSync(targetPath, { recursive: true, force: true });
+			return;
+		} catch (e) {
+			const busy = e?.code === "EBUSY" || e?.code === "EPERM";
+			if (i < retries - 1 && busy) {
+				// Brief backoff
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+				continue;
+			}
+			// Rename fallback so build can proceed
+			if (busy) {
+				// Try to terminate potential locking processes on Windows
+				if (process.platform === "win32") {
+					try {
+						const { execSync } = require("child_process");
+						execSync("taskkill /IM Diary.exe /F /T", { stdio: "ignore" });
+					} catch {}
+					try {
+						const { execSync } = require("child_process");
+						execSync("taskkill /IM electron.exe /F /T", { stdio: "ignore" });
+					} catch {}
+					Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+					try {
+						fs.rmSync(targetPath, { recursive: true, force: true });
+						return;
+					} catch {}
+				}
+				const dir = path.dirname(targetPath);
+				const base = path.basename(targetPath);
+				const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+				const fallback = path.join(dir, `${base}-old-${stamp}`);
+				try {
+					fs.renameSync(targetPath, fallback);
+					console.warn(
+						`⚠️  Could not delete ${targetPath} (in use). Renamed to ${fallback}. Continuing...`
+					);
+					return;
+				} catch (e2) {
+					console.warn(
+						`⚠️  Failed to clean ${targetPath}. Please close any running app using files in that folder. Will continue; electron-builder may still succeed.`
+					);
+					return;
+				}
+			}
+			// Non-busy errors: rethrow
+			throw e;
+		}
+	}
 }
-if (fs.existsSync("dist-electron")) {
-	fs.rmSync("dist-electron", { recursive: true, force: true });
-}
-if (fs.existsSync("release")) {
-	fs.rmSync("release", { recursive: true, force: true });
-}
+
+safeRemove("dist");
+safeRemove("dist-electron");
+safeRemove("release");
 
 try {
 	// Build Vite

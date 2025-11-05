@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import {
 	ChevronLeft,
 	ChevronRight,
@@ -12,9 +12,14 @@ import "./Calendar.css";
 interface CalendarProps {
 	entries: Entry[];
 	onSelectEntry: (entry: Entry) => void;
+	onNewEntryForDate: (dateISO: string) => void;
 }
 
-const Calendar: React.FC<CalendarProps> = ({ entries, onSelectEntry }) => {
+const Calendar: React.FC<CalendarProps> = ({
+	entries,
+	onSelectEntry,
+	onNewEntryForDate,
+}) => {
 	const [currentDate, setCurrentDate] = useState(new Date());
 	const [selectedDate, setSelectedDate] = useState<Date | null>(null);
 
@@ -173,7 +178,18 @@ const Calendar: React.FC<CalendarProps> = ({ entries, onSelectEntry }) => {
 						{selectedDateEntries.length === 0 ? (
 							<div className="no-entries">
 								<p>No journals for this date</p>
-								<button className="btn btn-primary">+ New Journal</button>
+								<button
+									className="btn btn-primary"
+									onClick={() => {
+										if (!selectedDate) return;
+										const iso = new Date(selectedDate.getTime())
+											.toISOString()
+											.split("T")[0];
+										onNewEntryForDate(iso);
+									}}
+								>
+									+ New Journal
+								</button>
 							</div>
 						) : (
 							<div className="entries-list">

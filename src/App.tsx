@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import {
-	BrowserRouter as Router,
+	BrowserRouter,
+	MemoryRouter,
 	Routes,
 	Route,
 	useNavigate,
@@ -36,7 +37,7 @@ function AppContent() {
 
 	// On app open: on macOS, show a one-time toast guiding manual download; elsewhere, auto-check is handled in main (prod)
 	useEffect(() => {
-		const platform = process.platform; // available in preload TS as we exposed, but nodeIntegration is off; fallback to platform check in main flow
+		const platform = (window as any)?.electronAPI?.system?.platform || "";
 		if (platform === "darwin") {
 			setTimeout(() => {
 				setToast({
@@ -146,6 +147,18 @@ function AppContent() {
 		navigate("/editor");
 	};
 
+	const handleNewEntryForDate = (dateISO: string) => {
+		const newEntry = {
+			title: "",
+			content: "",
+			date: dateISO,
+			mood: "",
+			tags: [],
+		};
+		setSelectedEntry(newEntry);
+		navigate("/editor");
+	};
+
 	return (
 		<div className="app">
 			<Sidebar
@@ -195,7 +208,11 @@ function AppContent() {
 					<Route
 						path="/calendar"
 						element={
-							<Calendar entries={entries} onSelectEntry={handleSelectEntry} />
+							<Calendar
+								entries={entries}
+								onSelectEntry={handleSelectEntry}
+								onNewEntryForDate={handleNewEntryForDate}
+							/>
 						}
 					/>
 					<Route path="/settings" element={<Settings />} />
@@ -213,10 +230,13 @@ function AppContent() {
 }
 
 function App() {
+	const RouterImpl = (import.meta as any).env?.PROD
+		? MemoryRouter
+		: BrowserRouter;
 	return (
-		<Router>
+		<RouterImpl>
 			<AppContent />
-		</Router>
+		</RouterImpl>
 	);
 }
 

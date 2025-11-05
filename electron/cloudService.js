@@ -1,4 +1,4 @@
-const { google } = require("googleapis");
+// Lazy-load heavy SDKs to avoid startup crashes if some transitive deps are missing
 const { Client } = require("@microsoft/microsoft-graph-client");
 const { PublicClientApplication } = require("@azure/msal-node");
 const { Dropbox } = require("dropbox");
@@ -7,6 +7,11 @@ const path = require("path");
 const { app } = require("electron");
 const http = require("http");
 const url = require("url");
+// Optional secure keychain storage
+let keytar = null;
+try {
+	keytar = require("keytar");
+} catch {}
 
 class CloudService {
 	constructor() {
@@ -17,6 +22,7 @@ class CloudService {
 		this.googleClient = null; // { client_id, client_secret }
 		this.googleCredsType = null; // 'installed' | 'web'
 		this.googleAllowedRedirects = [];
+		this._google = null; // lazy-loaded googleapis
 
 		// OneDrive
 		this.oneDriveClient = null;
@@ -33,6 +39,10 @@ class CloudService {
 			this.googleOAuthDir,
 			"credentials.json"
 		);
+		// Optional embedded application config packaged with the app
+		// Maintainers can provide electron/app-config.json to ship a default OAuth client
+		// Shape expected: { "google": { "installed": { client_id, client_secret, redirect_uris[] } } }
+		this.embeddedConfigPath = path.join(__dirname, "app-config.json");
 		this.dropboxOAuthDir = path.join(this.oauthRootDir, "dropbox");
 		this.dropboxTokenPath = path.join(this.dropboxOAuthDir, "dropbox.json");
 		this.configPath = path.join(this.userDataDir, "cloud-config.json");
@@ -41,7 +51,7 @@ class CloudService {
 		this._loopbackServer = null;
 		this._loopbackAuthPromise = null;
 		this._resolveLoopbackAuth = null;
-		this._expectedCallbackPath = "/oauth2callback";
+		this._expectedCallbackPath = "/";
 
 		// Loopback holders (OneDrive)
 		this._onedriveLoopbackServer = null;
@@ -52,6 +62,42 @@ class CloudService {
 
 		this.ensureOauthDirs();
 		this.loadConfig();
+	}
+
+	// ---------- Keychain helpers (best-effort) ----------
+	_getServiceName() {
+		return "Diary";
+	}
+
+	async _keytarSet(account, value) {
+		if (!keytar) return false;
+		try {
+			await keytar.setPassword(this._getServiceName(), account, value);
+			return true;
+		} catch (e) {
+			console.warn("keytar set failed:", e?.message || e);
+			return false;
+		}
+	}
+
+	async _keytarGet(account) {
+		if (!keytar) return null;
+		try {
+			return await keytar.getPassword(this._getServiceName(), account);
+		} catch (e) {
+			console.warn("keytar get failed:", e?.message || e);
+			return null;
+		}
+	}
+
+	async _keytarDelete(account) {
+		if (!keytar) return false;
+		try {
+			return await keytar.deletePassword(this._getServiceName(), account);
+		} catch (e) {
+			console.warn("keytar delete failed:", e?.message || e);
+			return false;
+		}
 	}
 
 	// Ensure a dedicated Google Drive folder for backups, return its id
@@ -81,10 +127,21 @@ class CloudService {
 	}
 
 	// Attempt to rebuild Google OAuth client from saved credentials/tokens when needed
-	_ensureGoogleAuthForSync() {
+	async _ensureGoogleAuthForSync() {
 		try {
+			const google = this._getGoogle();
 			if (this.googleAuth && this.config?.googleDrive?.enabled) return true;
-			if (!this.config?.googleDrive?.tokens) return false;
+			let tokens = this.config?.googleDrive?.tokens;
+			if (!tokens) {
+				// Try keychain if config doesn't have tokens
+				try {
+					const fromKeychain = await this._keytarGet("googleDrive");
+					if (fromKeychain) {
+						tokens = JSON.parse(fromKeychain);
+					}
+				} catch {}
+			}
+			if (!tokens) return false;
 			const creds = this.readGoogleCredentialsFromFile();
 			if (!creds) return false;
 			const clientBlock = creds.installed || creds.web;
@@ -104,7 +161,7 @@ class CloudService {
 				client_secret,
 				redirect
 			);
-			this.googleAuth.setCredentials(this.config.googleDrive.tokens);
+			this.googleAuth.setCredentials(tokens);
 			return true;
 		} catch (e) {
 			console.warn("Failed to ensure Google auth for sync:", e?.message || e);
@@ -112,20 +169,51 @@ class CloudService {
 		}
 	}
 
+	_getGoogle() {
+		if (!this._google) {
+			try {
+				this._google = require("googleapis").google;
+			} catch (e) {
+				throw new Error(
+					"Google API module is not available. Please reinstall the app or ensure dependencies are installed."
+				);
+			}
+		}
+		return this._google;
+	}
+
 	// Rebuild Dropbox client from stored token when needed
-	_ensureDropboxClientForSync() {
+	async _ensureDropboxClientForSync() {
 		try {
 			if (this.dropboxClient && this.config?.dropbox?.enabled) return true;
-			const token =
+			// 1) Try existing session token from config or legacy token file
+			let accessToken =
 				this.config?.dropbox?.token || this.readDropboxTokenFromFile();
-			if (!token) return false;
-			this.dropboxClient = new Dropbox({ accessToken: token });
+			// 2) If none, try OS keychain refresh token and exchange for an access token
+			if (!accessToken) {
+				try {
+					const refreshToken = await this._keytarGet("dropbox");
+					if (refreshToken) {
+						const token = await this._dropboxExchangeRefreshToken(refreshToken);
+						if (token) {
+							accessToken = token;
+							// do NOT persist access token long-term; keep ephemeral
+						}
+					}
+				} catch {}
+			}
+
+			if (!accessToken) return false;
+			this.dropboxClient = new Dropbox({ accessToken });
 			this.config.dropbox = this.config.dropbox || {
 				enabled: false,
 				token: null,
 				lastSync: null,
 			};
-			this.config.dropbox.token = token;
+			// Maintain token in config only when coming from legacy file path
+			if (this.readDropboxTokenFromFile()) {
+				this.config.dropbox.token = accessToken;
+			}
 			return true;
 		} catch (e) {
 			console.warn(
@@ -225,20 +313,130 @@ class CloudService {
 
 	// ---------- Google Drive ----------
 	hasGoogleCredentialsFile() {
-		return fs.existsSync(this.googleCredentialsPath);
+		// Strictly check if user-provided credentials.json exists
+		try {
+			return fs.existsSync(this.googleCredentialsPath);
+		} catch {
+			return false;
+		}
 	}
 
 	getGoogleCredentialsDir() {
-		return this.googleOAuthDir;
+		try {
+			this.ensureOauthDirs();
+			return this.googleOAuthDir;
+		} catch (e) {
+			console.error("Failed to get Google credentials dir:", e);
+			return this.googleOAuthDir;
+		}
+	}
+
+	getGoogleCredentialsSource() {
+		try {
+			// Prefer explicit user file when present and valid
+			if (fs.existsSync(this.googleCredentialsPath)) {
+				try {
+					const raw = fs.readFileSync(this.googleCredentialsPath, "utf8");
+					const parsed = JSON.parse(raw);
+					const block = parsed?.installed || parsed?.web ? parsed : null;
+					const validInstalled = !!(
+						block?.installed?.client_id &&
+						block?.installed?.client_secret &&
+						Array.isArray(block?.installed?.redirect_uris)
+					);
+					const validWeb = !!(
+						block?.web?.client_id &&
+						block?.web?.client_secret &&
+						Array.isArray(block?.web?.redirect_uris)
+					);
+					if (validInstalled || validWeb) return "user";
+				} catch {}
+			}
+			// Else check embedded app-config.json
+			if (fs.existsSync(this.embeddedConfigPath)) {
+				try {
+					const raw = fs.readFileSync(this.embeddedConfigPath, "utf8");
+					const parsed = JSON.parse(raw);
+					const googleBlock = parsed.google || parsed;
+					const validInstalled = !!(
+						googleBlock?.installed?.client_id &&
+						googleBlock?.installed?.client_secret &&
+						Array.isArray(googleBlock?.installed?.redirect_uris)
+					);
+					const validWeb = !!(
+						googleBlock?.web?.client_id &&
+						googleBlock?.web?.client_secret &&
+						Array.isArray(googleBlock?.web?.redirect_uris)
+					);
+					if (validInstalled || validWeb) return "embedded";
+				} catch {}
+			}
+			return "none";
+		} catch {
+			return "none";
+		}
 	}
 
 	readGoogleCredentialsFromFile() {
-		if (!this.hasGoogleCredentialsFile()) return null;
+		// Prefer user-provided credentials file, else fall back to embedded app config
 		try {
-			const raw = fs.readFileSync(this.googleCredentialsPath, "utf8");
-			return JSON.parse(raw);
+			const hasUserCreds = fs.existsSync(this.googleCredentialsPath);
+			const hasEmbedded = fs.existsSync(this.embeddedConfigPath);
+			let embedded = null;
+			if (hasEmbedded) {
+				try {
+					const eraw = fs.readFileSync(this.embeddedConfigPath, "utf8");
+					const eparsed = JSON.parse(eraw);
+					const eblock = eparsed.google || eparsed;
+					if (eblock?.installed || eblock?.web) {
+						embedded = { installed: eblock.installed, web: eblock.web };
+					}
+				} catch {}
+			}
+			if (hasUserCreds) {
+				const raw = fs.readFileSync(this.googleCredentialsPath, "utf8");
+				const parsed = JSON.parse(raw);
+				const ublock = parsed.installed || parsed.web ? parsed : null;
+				if (ublock?.installed) {
+					console.log(
+						"[cloudService] Google creds: using user credentials file (installed)",
+						this.googleCredentialsPath
+					);
+					return { installed: ublock.installed, web: ublock.web };
+				}
+				if (ublock?.web) {
+					// Heuristic: if web client redirects include only default port (80) or no port, Windows likely can't bind.
+					const redirects = Array.isArray(ublock.web.redirect_uris)
+						? ublock.web.redirect_uris
+						: [];
+					const hasUsableLocalhost = redirects.some((u) =>
+						/http:\/\/(localhost|127\.0\.0\.1):\d+/i.test(u)
+					);
+					if (!hasUsableLocalhost && embedded?.installed) {
+						console.warn(
+							"[cloudService] User web credentials lack a localhost port (e.g., :3000). Falling back to embedded installed client."
+						);
+						return embedded;
+					}
+					console.log(
+						"[cloudService] Google creds: using user credentials file (web)",
+						this.googleCredentialsPath
+					);
+					return { installed: ublock.installed, web: ublock.web };
+				}
+			}
+			if (fs.existsSync(this.embeddedConfigPath)) {
+				const raw = fs.readFileSync(this.embeddedConfigPath, "utf8");
+				const parsed = JSON.parse(raw);
+				// Support either { google: { installed|web } } or direct installed/web block
+				const googleBlock = parsed.google || parsed;
+				if (googleBlock?.installed || googleBlock?.web) {
+					return { installed: googleBlock.installed, web: googleBlock.web };
+				}
+			}
+			return null;
 		} catch (e) {
-			console.error("Failed to read Google credentials file:", e);
+			console.error("Failed to read Google credentials:", e);
 			return null;
 		}
 	}
@@ -301,6 +499,7 @@ class CloudService {
 
 	async initGoogleDrive(credentials) {
 		try {
+			const google = this._getGoogle();
 			let creds = credentials || this.readGoogleCredentialsFromFile();
 			if (!creds && this.attemptBootstrapGoogleCredentialsFromRepo()) {
 				creds = this.readGoogleCredentialsFromFile();
@@ -324,7 +523,7 @@ class CloudService {
 				client_secret,
 				redirect_uris && redirect_uris[0]
 					? redirect_uris[0]
-					: "http://localhost:3000/oauth2callback"
+					: "http://localhost"
 			);
 			if (this.config.googleDrive.tokens) {
 				this.googleAuth.setCredentials(this.config.googleDrive.tokens);
@@ -346,14 +545,15 @@ class CloudService {
 
 	async startGoogleLoopbackAuth() {
 		if (!this.googleClient) throw new Error("Google Drive not initialized");
+		const google = this._getGoogle();
 
 		this._loopbackAuthPromise = new Promise(
 			(resolve) => (this._resolveLoopbackAuth = resolve)
 		);
 
 		let redirectUri;
-		let expectedPath = "/oauth2callback";
-		let listenHost = "localhost";
+		let expectedPath = "/"; // Installed apps: use root path to avoid redirect_uri mismatch
+		let listenHost = "127.0.0.1"; // Prefer IPv4 loopback for reliability on Windows
 		let listenPort = 0; // ephemeral by default
 
 		if (this.googleCredsType === "web") {
@@ -377,63 +577,145 @@ class CloudService {
 		}
 
 		this._expectedCallbackPath = expectedPath;
-		this._loopbackServer = http.createServer(async (req, res) => {
-			try {
-				const parsed = url.parse(req.url, true);
-				const pathOk =
-					parsed.pathname === this._expectedCallbackPath ||
-					parsed.pathname === "/" ||
-					parsed.pathname === "";
-				if (!pathOk) {
-					res.writeHead(404, { "Content-Type": "text/plain" });
-					res.end("Not found");
-					return;
-				}
-				if (parsed.query && parsed.query.code) {
-					const code = String(parsed.query.code);
-					try {
-						const { tokens } = await this.googleAuth.getToken(code);
-						this.googleAuth.setCredentials(tokens);
-						this.config.googleDrive.tokens = tokens;
-						this.config.googleDrive.enabled = true;
-						this.saveConfig();
-						res.writeHead(200, { "Content-Type": "text/html" });
-						res.end(this._renderSuccessHTML("Google Drive"));
-						this._resolveLoopbackAuth(true);
-					} catch (e) {
-						console.error("Token exchange failed:", e);
-						res.writeHead(500, { "Content-Type": "text/html" });
-						res.end(
-							'<html><body style="font-family:sans-serif"><h2>Authentication failed</h2><p>Please return to the app and try again.</p></body></html>'
-						);
-						this._resolveLoopbackAuth(false);
-					}
-				} else {
-					res.writeHead(400, { "Content-Type": "text/plain" });
-					res.end("Missing code");
-				}
-			} finally {
-				try {
-					this._loopbackServer.close();
-				} catch {}
-				this._loopbackServer = null;
-			}
-		});
 
-		await new Promise((resolve, reject) => {
+		const createServer = () =>
+			http.createServer(async (req, res) => {
+				try {
+					const parsed = url.parse(req.url, true);
+					const pathOk =
+						parsed.pathname === this._expectedCallbackPath ||
+						parsed.pathname === "/" ||
+						parsed.pathname === "";
+					if (!pathOk) {
+						res.writeHead(404, { "Content-Type": "text/plain" });
+						res.end("Not found");
+						return;
+					}
+					if (parsed.query && parsed.query.code) {
+						const code = String(parsed.query.code);
+						try {
+							const { tokens } = await this.googleAuth.getToken(code);
+							this.googleAuth.setCredentials(tokens);
+							this.config.googleDrive.tokens = tokens;
+							this.config.googleDrive.enabled = true;
+							this.saveConfig();
+							try {
+								await this._keytarSet("googleDrive", JSON.stringify(tokens));
+							} catch {}
+							// Save to keychain when available
+							try {
+								await this._keytarSet("googleDrive", JSON.stringify(tokens));
+							} catch {}
+							res.writeHead(200, { "Content-Type": "text/html" });
+							res.end(this._renderSuccessHTML("Google Drive"));
+							this._resolveLoopbackAuth(true);
+						} catch (e) {
+							console.error("Token exchange failed:", e);
+							res.writeHead(500, { "Content-Type": "text/html" });
+							res.end(
+								'<html><body style="font-family:sans-serif"><h2>Authentication failed</h2><p>Please return to the app and try again.</p></body></html>'
+							);
+							this._resolveLoopbackAuth(false);
+						}
+					} else {
+						res.writeHead(400, { "Content-Type": "text/plain" });
+						res.end("Missing code");
+					}
+				} finally {
+					try {
+						this._loopbackServer.close();
+					} catch {}
+					this._loopbackServer = null;
+				}
+			});
+
+		const tryListen = (host) =>
+			new Promise((resolve, reject) => {
+				this._loopbackServer = createServer();
+				const onError = (err) => {
+					try {
+						this._loopbackServer?.close();
+					} catch {}
+					this._loopbackServer = null;
+					reject(err);
+				};
+				this._loopbackServer.once("error", onError);
+				this._loopbackServer.listen(listenPort, host, () => {
+					this._loopbackServer?.off("error", onError);
+					resolve(true);
+				});
+			});
+
+		const hostsToTry =
+			this.googleCredsType === "web"
+				? [listenHost]
+				: ["127.0.0.1", "localhost"];
+		let boundHost = null;
+		for (const host of hostsToTry) {
 			try {
-				this._loopbackServer.listen(listenPort, listenHost, resolve);
+				await tryListen(host);
+				boundHost = host;
+				break;
 			} catch (e) {
-				reject(e);
+				console.warn("Google loopback bind failed on", host, e?.message || e);
 			}
-		});
+		}
+		// If not bound yet, attempt a common fixed port (3000) on each host
+		if (!boundHost) {
+			for (const host of hostsToTry) {
+				try {
+					this._loopbackServer = null;
+					await new Promise((resolve, reject) => {
+						this._loopbackServer = http.createServer(() => {});
+						this._loopbackServer.once("error", reject);
+						this._loopbackServer.listen(3000, host, resolve);
+					});
+					try {
+						this._loopbackServer.close();
+					} catch {}
+					await tryListen(host);
+					boundHost = host;
+					break;
+				} catch (e) {
+					console.warn(
+						"Google loopback bind on port 3000 failed for",
+						host,
+						e?.message || e
+					);
+				}
+			}
+		}
+		if (!boundHost) {
+			// Manual fallback for installed client: return an auth URL using a common localhost redirect.
+			if (this.googleCredsType !== "web") {
+				const manualRedirect = "http://127.0.0.1:3000/";
+				this.googleAuth = new google.auth.OAuth2(
+					this.googleClient.client_id,
+					this.googleClient.client_secret,
+					manualRedirect
+				);
+				const manualUrl = this.googleAuth.generateAuthUrl({
+					access_type: "offline",
+					prompt: "consent",
+					scope: ["https://www.googleapis.com/auth/drive.file"],
+					redirect_uri: manualRedirect,
+				});
+				console.warn(
+					"Loopback server not bound; returning manual auth URL using redirect",
+					manualRedirect
+				);
+				return manualUrl;
+			}
+			console.error("Unable to bind loopback server on any host");
+			return null;
+		}
 		const address = this._loopbackServer.address();
 		const actualPort =
 			typeof address === "object" && address
 				? address.port
 				: listenPort || 3000;
 		if (!redirectUri)
-			redirectUri = `http://${listenHost}:${actualPort}${expectedPath}`;
+			redirectUri = `http://${boundHost}:${actualPort}${expectedPath}`;
 
 		console.log("Google loopback auth listening:", {
 			host: listenHost,
@@ -483,6 +765,9 @@ class CloudService {
 			this.config.googleDrive.tokens = tokens;
 			this.config.googleDrive.enabled = true;
 			this.saveConfig();
+			try {
+				await this._keytarSet("googleDrive", JSON.stringify(tokens));
+			} catch {}
 			return true;
 		} catch (e) {
 			console.error("Error setting Google auth code:", e);
@@ -496,7 +781,8 @@ class CloudService {
 		mimeType = "application/json"
 	) {
 		try {
-			if (!this.googleAuth) this._ensureGoogleAuthForSync();
+			const google = this._getGoogle();
+			if (!this.googleAuth) await this._ensureGoogleAuthForSync();
 			if (!this.googleAuth || !this.config.googleDrive.enabled)
 				throw new Error("Google Drive not authenticated");
 			const drive = google.drive({ version: "v3", auth: this.googleAuth });
@@ -546,6 +832,7 @@ class CloudService {
 
 	async downloadFromGoogleDrive(fileName) {
 		try {
+			const google = this._getGoogle();
 			if (!this.googleAuth || !this.config.googleDrive.enabled)
 				throw new Error("Google Drive not authenticated");
 			const drive = google.drive({ version: "v3", auth: this.googleAuth });
@@ -579,6 +866,9 @@ class CloudService {
 		this.config.googleDrive.lastSync = null;
 		this.saveConfig();
 		this.googleAuth = null;
+		try {
+			this._keytarDelete("googleDrive");
+		} catch {}
 	}
 
 	// ---------- OneDrive ----------
@@ -927,6 +1217,27 @@ class CloudService {
 		return this.attemptBootstrapDropboxTokenFromRepo();
 	}
 
+	_readEmbeddedDropboxConfig() {
+		try {
+			if (!fs.existsSync(this.embeddedConfigPath)) return null;
+			const raw = fs.readFileSync(this.embeddedConfigPath, "utf8");
+			const parsed = JSON.parse(raw);
+			return parsed?.dropbox || null;
+		} catch (e) {
+			return null;
+		}
+	}
+
+	getDropboxCredentialsSource() {
+		try {
+			if (this._readEmbeddedDropboxConfig()?.appKey) return "embedded";
+			if (this.hasDropboxTokenFile()) return "file";
+			return "none";
+		} catch {
+			return "none";
+		}
+	}
+
 	async initDropbox(token) {
 		try {
 			let accessToken = token || this.readDropboxTokenFromFile();
@@ -935,7 +1246,7 @@ class CloudService {
 			}
 			if (!accessToken) {
 				throw new Error(
-					"Missing Dropbox accessToken. Place dropbox.json with { accessToken } in the OAuth folder or pass token."
+					"Missing Dropbox accessToken. Place dropbox.json with { accessToken } in the OAuth folder or connect via OAuth."
 				);
 			}
 			this.dropboxClient = new Dropbox({ accessToken });
@@ -954,9 +1265,202 @@ class CloudService {
 		}
 	}
 
+	async startDropboxLoopbackAuth() {
+		const cfg = this._readEmbeddedDropboxConfig();
+		if (!cfg?.appKey) throw new Error("Dropbox appKey not configured");
+		this._dropboxLoopbackPromise = new Promise(
+			(resolve) => (this._resolveDropboxLoopback = resolve)
+		);
+
+		let listenHost = "127.0.0.1";
+		const expectedPath = "/auth/callback";
+		let listenPort = 0; // ephemeral
+
+		const createServer = () =>
+			http.createServer(async (req, res) => {
+				try {
+					const parsed = url.parse(req.url, true);
+					const okPath =
+						parsed.pathname === expectedPath ||
+						parsed.pathname === "/" ||
+						parsed.pathname === "";
+					if (!okPath) {
+						res.writeHead(404, { "Content-Type": "text/plain" });
+						res.end("Not found");
+						return;
+					}
+					if (parsed.query && parsed.query.code) {
+						const code = String(parsed.query.code);
+						try {
+							const refresh = await this._dropboxExchangeAuthCode(
+								cfg,
+								code,
+								this._dropboxCodeVerifier,
+								this._dropboxRedirectUri
+							);
+							if (!refresh) throw new Error("No refresh token returned");
+							await this._keytarSet("dropbox", refresh);
+							this.config.dropbox = this.config.dropbox || {
+								enabled: false,
+								token: null,
+								lastSync: null,
+							};
+							this.config.dropbox.enabled = true;
+							this.saveConfig();
+							res.writeHead(200, { "Content-Type": "text/html" });
+							res.end(this._renderSuccessHTML("Dropbox"));
+							this._resolveDropboxLoopback(true);
+						} catch (e) {
+							console.error("Dropbox token exchange failed:", e);
+							res.writeHead(500, { "Content-Type": "text/html" });
+							res.end(
+								'<html><body style="font-family:sans-serif"><h2>Authentication failed</h2><p>Please return to the app and try again.</p></body></html>'
+							);
+							this._resolveDropboxLoopback(false);
+						}
+					} else {
+						res.writeHead(400, { "Content-Type": "text/plain" });
+						res.end("Missing code");
+					}
+				} finally {
+					try {
+						this._dropboxLoopbackServer.close();
+					} catch {}
+					this._dropboxLoopbackServer = null;
+				}
+			});
+
+		const tryListen = (host, port) =>
+			new Promise((resolve, reject) => {
+				this._dropboxLoopbackServer = createServer();
+				const onError = (err) => {
+					try {
+						this._dropboxLoopbackServer?.close();
+					} catch {}
+					this._dropboxLoopbackServer = null;
+					reject(err);
+				};
+				this._dropboxLoopbackServer.once("error", onError);
+				this._dropboxLoopbackServer.listen(port, host, () => {
+					this._dropboxLoopbackServer?.off("error", onError);
+					resolve(true);
+				});
+			});
+
+		const hosts = ["127.0.0.1", "localhost"];
+		let bound = null;
+		for (const h of hosts) {
+			try {
+				await tryListen(h, listenPort);
+				bound = h;
+				break;
+			} catch {}
+			try {
+				await tryListen(h, 3000);
+				bound = h;
+				listenPort = 3000;
+				break;
+			} catch (e) {
+				console.warn("Dropbox loopback bind failed on", h, e?.message || e);
+			}
+		}
+		if (!bound) return null;
+		const addr = this._dropboxLoopbackServer.address();
+		const port = typeof addr === "object" && addr ? addr.port : 3000;
+		this._dropboxRedirectUri =
+			cfg.redirect || `http://${bound}:${port}${expectedPath}`;
+
+		// PKCE
+		this._dropboxCodeVerifier = this._pkceVerifier();
+		const codeChallenge = this._pkceChallenge(this._dropboxCodeVerifier);
+		const params = new URLSearchParams({
+			response_type: "code",
+			client_id: cfg.appKey,
+			redirect_uri: this._dropboxRedirectUri,
+			token_access_type: "offline",
+			code_challenge: codeChallenge,
+			code_challenge_method: "S256",
+		});
+		return `https://www.dropbox.com/oauth2/authorize?${params.toString()}`;
+	}
+
+	waitDropboxLoopbackAuthComplete() {
+		if (!this._dropboxLoopbackPromise) return Promise.resolve(false);
+		const TIMEOUT_MS = 180000; // 3 minutes
+		return Promise.race([
+			this._dropboxLoopbackPromise,
+			new Promise((resolve) =>
+				setTimeout(() => {
+					console.warn("Dropbox loopback auth timed out");
+					try {
+						this._dropboxLoopbackServer && this._dropboxLoopbackServer.close();
+					} catch {}
+					this._dropboxLoopbackServer = null;
+					resolve(false);
+				}, TIMEOUT_MS)
+			),
+		]);
+	}
+
+	_pkceVerifier() {
+		const random = require("crypto").randomBytes(32);
+		return random
+			.toString("base64")
+			.replace(/\+/g, "-")
+			.replace(/\//g, "_")
+			.replace(/=+$/, "");
+	}
+
+	_pkceChallenge(verifier) {
+		const crypto = require("crypto");
+		const hash = crypto.createHash("sha256").update(verifier).digest("base64");
+		return hash.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+	}
+
+	async _dropboxExchangeAuthCode(cfg, code, verifier, redirectUri) {
+		const fetch = require("isomorphic-fetch");
+		const body = new URLSearchParams({
+			grant_type: "authorization_code",
+			code,
+			client_id: cfg.appKey,
+			code_verifier: verifier,
+			redirect_uri: redirectUri,
+		});
+		const resp = await fetch("https://api.dropboxapi.com/oauth2/token", {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body,
+		});
+		if (!resp.ok) {
+			const text = await resp.text();
+			throw new Error(`Dropbox token error: ${text}`);
+		}
+		const json = await resp.json();
+		return json.refresh_token || null;
+	}
+
+	async _dropboxExchangeRefreshToken(refreshToken) {
+		const cfg = this._readEmbeddedDropboxConfig();
+		if (!cfg?.appKey) return null;
+		const fetch = require("isomorphic-fetch");
+		const body = new URLSearchParams({
+			grant_type: "refresh_token",
+			refresh_token: refreshToken,
+			client_id: cfg.appKey,
+		});
+		const resp = await fetch("https://api.dropboxapi.com/oauth2/token", {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body,
+		});
+		if (!resp.ok) return null;
+		const json = await resp.json();
+		return json.access_token || null;
+	}
+
 	async uploadToDropbox(fileName, fileContent) {
 		try {
-			if (!this.dropboxClient) this._ensureDropboxClientForSync();
+			if (!this.dropboxClient) await this._ensureDropboxClientForSync();
 			if (!this.dropboxClient || !this.config.dropbox?.enabled)
 				throw new Error("Dropbox not authenticated");
 			try {
@@ -999,6 +1503,7 @@ class CloudService {
 
 	async downloadFromDropbox(fileName) {
 		try {
+			if (!this.dropboxClient) await this._ensureDropboxClientForSync();
 			if (!this.dropboxClient || !this.config.dropbox?.enabled)
 				throw new Error("Dropbox not authenticated");
 			const resp = await this.dropboxClient.filesDownload({
@@ -1019,6 +1524,9 @@ class CloudService {
 		this.config.dropbox = { enabled: false, token: null, lastSync: null };
 		this.saveConfig();
 		this.dropboxClient = null;
+		try {
+			this._keytarDelete("dropbox");
+		} catch {}
 	}
 }
 

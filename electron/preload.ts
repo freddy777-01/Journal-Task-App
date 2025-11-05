@@ -47,6 +47,7 @@ export interface SettingsAPI {
 export interface SystemAPI {
 	getPlatform: () => Promise<string>;
 	openExternal: (url: string) => Promise<boolean>;
+	copyToClipboard?: (text: string) => Promise<boolean>;
 }
 
 // Cloud Sync types
@@ -86,6 +87,7 @@ export interface CloudAPI {
 	googleCredentialsDir: () => Promise<string>;
 	googleOpenCredentialsDir: () => Promise<string>;
 	googleBootstrapCredentials: () => Promise<boolean>;
+	googleCredentialsSource: () => Promise<"embedded" | "user" | "none">;
 	// OneDrive
 	oneDriveInit: (clientId: string) => Promise<boolean>;
 	oneDriveStartLoopbackAuth: () => Promise<string | null>;
@@ -100,6 +102,9 @@ export interface CloudAPI {
 	dropboxOpenTokenDir: () => Promise<string>;
 	dropboxBootstrapToken: () => Promise<boolean>;
 	dropboxDisconnect: () => Promise<boolean>;
+	dropboxCredentialsSource?: () => Promise<"embedded" | "file" | "none">;
+	dropboxStartLoopbackAuth?: () => Promise<string | null>;
+	dropboxWaitLoopback?: () => Promise<boolean>;
 	// Sync
 	syncNow: () => Promise<{
 		googleDrive: { success?: boolean; error?: string } | null;
@@ -169,6 +174,8 @@ const systemAPI: SystemAPI = {
 		return process.platform;
 	},
 	openExternal: (url: string) => ipcRenderer.invoke("open-external-url", url),
+	copyToClipboard: (text: string) =>
+		ipcRenderer.invoke("clipboard-write", text),
 };
 
 const cloudAPI: CloudAPI = {
@@ -191,6 +198,8 @@ const cloudAPI: CloudAPI = {
 		ipcRenderer.invoke("cloud-google-open-creds-dir"),
 	googleBootstrapCredentials: () =>
 		ipcRenderer.invoke("cloud-google-bootstrap-creds"),
+	googleCredentialsSource: () =>
+		ipcRenderer.invoke("cloud-google-credentials-source"),
 	// OneDrive
 	oneDriveInit: (clientId: string) =>
 		ipcRenderer.invoke("cloud-onedrive-init", clientId),
@@ -211,6 +220,11 @@ const cloudAPI: CloudAPI = {
 	dropboxBootstrapToken: () =>
 		ipcRenderer.invoke("cloud-dropbox-bootstrap-token"),
 	dropboxDisconnect: () => ipcRenderer.invoke("cloud-dropbox-disconnect"),
+	dropboxCredentialsSource: () =>
+		ipcRenderer.invoke("cloud-dropbox-credentials-source"),
+	dropboxStartLoopbackAuth: () =>
+		ipcRenderer.invoke("cloud-dropbox-start-loopback-auth"),
+	dropboxWaitLoopback: () => ipcRenderer.invoke("cloud-dropbox-wait-loopback"),
 	// Sync
 	syncNow: () => ipcRenderer.invoke("cloud-sync-now"),
 	setAutoSync: (enabled: boolean) =>

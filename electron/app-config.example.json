@@ -1,0 +1,16 @@
+{
+    "google": {
+        "installed": {
+            "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+            "client_secret": "YOUR_CLIENT_SECRET",
+            "redirect_uris": [
+                "http://localhost:3000/oauth2callback",
+                "http://127.0.0.1:3000/oauth2callback"
+            ]
+        }
+    },
+    "dropbox": {
+        "appKey": "YOUR_DROPBOX_APP_KEY",
+        "redirect": "http://localhost:3000/auth/callback"
+    }
+}

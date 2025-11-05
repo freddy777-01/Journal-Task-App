@@ -57,3 +57,4 @@ temp/
 src/api-key/
 **/credentials.json
 **/client_secret*.json
+electron/app-config.json

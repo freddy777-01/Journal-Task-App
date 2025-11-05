@@ -34,6 +34,27 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Inject Google OAuth client (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (-not $env:GOOGLE_CLIENT_JSON) {
+            Write-Host "No GOOGLE_CLIENT_JSON secret set; skipping embedded client"; exit 0
+          }
+          New-Item -ItemType Directory -Force -Path electron | Out-Null
+          $env:GOOGLE_CLIENT_JSON | Out-File -FilePath electron/app-config.json -Encoding utf8
+        env:
+          GOOGLE_CLIENT_JSON: ${{ secrets.GOOGLE_CLIENT_JSON }}
+
+      - name: Inject Google OAuth client (macOS/Linux)
+        if: matrix.os != 'windows-latest'
+        run: |
+          if [ -z "$GOOGLE_CLIENT_JSON" ]; then echo "No GOOGLE_CLIENT_JSON secret set; skipping embedded client"; exit 0; fi
+          mkdir -p electron
+          printf "%s" "$GOOGLE_CLIENT_JSON" > electron/app-config.json
+        env:
+          GOOGLE_CLIENT_JSON: ${{ secrets.GOOGLE_CLIENT_JSON }}
+
       - name: Build renderer (Vite)
         run: npm run build:vite
 

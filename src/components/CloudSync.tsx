@@ -40,6 +40,10 @@ const CloudSync: React.FC = () => {
 	const [showDropboxSetup, setShowDropboxSetup] = useState(false);
 	const [dropboxInProgress, setDropboxInProgress] = useState(false);
 	const [dropboxSucceeded, setDropboxSucceeded] = useState(false);
+	const [dropboxSource, setDropboxSource] = useState<
+		"embedded" | "file" | "none"
+	>("none");
+	const [dropboxAuthUrl, setDropboxAuthUrl] = useState<string | null>(null);
 
 	// Transient per-service "just synced" indicators
 	const [justSynced, setJustSynced] = useState({
@@ -52,12 +56,30 @@ const CloudSync: React.FC = () => {
 	const [authStep, setAuthStep] = useState<"credentials" | "waiting">(
 		"credentials"
 	);
+	const [credentialsSource, setCredentialsSource] = useState<
+		"embedded" | "user" | "none"
+	>("none");
 	const [googleAuthInProgress, setGoogleAuthInProgress] = useState(false);
 	const [googleAuthSucceeded, setGoogleAuthSucceeded] = useState(false);
-	const isProduction = process.env.NODE_ENV !== "development";
+	const [googleAuthUrl, setGoogleAuthUrl] = useState<string | null>(null);
+	const [googleManualMode, setGoogleManualMode] = useState(false);
+	const [googleAuthCode, setGoogleAuthCode] = useState("");
+	const isProduction = import.meta.env.PROD;
 
 	useEffect(() => {
 		loadCloudStatus();
+		// Detect where credentials come from so we can simplify UX when embedded
+		(async () => {
+			try {
+				const src = await window.electronAPI.cloud.googleCredentialsSource?.();
+				if (src) setCredentialsSource(src as any);
+				const dsrc =
+					await window.electronAPI.cloud.dropboxCredentialsSource?.();
+				if (dsrc) setDropboxSource(dsrc as any);
+			} catch (e) {
+				console.warn("Could not detect credentials source:", e);
+			}
+		})();
 		// Listen for auto-sync results from main process
 		const unsub =
 			typeof window !== "undefined" &&
@@ -210,20 +232,38 @@ const CloudSync: React.FC = () => {
 	// Google Drive Setup
 	const startGoogleLoopbackFlow = async () => {
 		// Initialize and start loopback auth, open URL, wait for completion
-		await window.electronAPI.cloud.googleInit?.();
-		const loopUrl = await window.electronAPI.cloud.googleStartLoopbackAuth?.();
-		if (!loopUrl) {
+		console.log("[CloudSync] Google: init loopback flow");
+		const initOk = await window.electronAPI.cloud.googleInit?.();
+		if (!initOk) {
+			console.error(
+				"[CloudSync] Google: init failed (no credentials or googleapis not available)"
+			);
 			setSyncMessage({
 				type: "error",
-				text: "Couldn't start Google authorization. Check your credentials JSON redirect URIs and try again.",
+				text: "Couldn't initialize Google Drive. Ensure embedded credentials exist or place credentials.json in the OAuth folder.",
 			});
 			setAuthStep("credentials");
 			return false;
 		}
+		const loopUrl = await window.electronAPI.cloud.googleStartLoopbackAuth?.();
+		console.log("[CloudSync] Google: loopback URL", loopUrl);
+		if (!loopUrl) {
+			setSyncMessage({
+				type: "error",
+				text: "Couldn't start Google authorization. If a browser didn't open, try 'Copy link' after fixing credentials or network.",
+			});
+			setGoogleAuthUrl(null);
+			setAuthStep("credentials");
+			return false;
+		}
+		setGoogleAuthUrl(loopUrl);
 		setAuthStep("waiting");
 		setGoogleAuthInProgress(true);
+		console.log("[CloudSync] Google: opening external URL");
 		await window.electronAPI.cloud.openExternalUrl(loopUrl);
+		console.log("[CloudSync] Google: waiting for loopback to complete");
 		const ok = await window.electronAPI.cloud.googleWaitLoopback?.();
+		console.log("[CloudSync] Google: loopback result", ok);
 		setGoogleAuthInProgress(false);
 		if (ok) {
 			setGoogleAuthSucceeded(true);
@@ -245,6 +285,46 @@ const CloudSync: React.FC = () => {
 		return false;
 	};
 
+	// Ensure we have a loopback auth URL; if missing, try to create it
+	const ensureGoogleAuthUrl = async (): Promise<string | null> => {
+		if (googleAuthUrl) return googleAuthUrl;
+		console.log("[CloudSync] Google: ensure auth URL - initializing");
+		const initOk = await window.electronAPI.cloud.googleInit?.();
+		if (!initOk) {
+			console.error("[CloudSync] Google: ensure auth URL - init failed");
+			setSyncMessage({
+				type: "error",
+				text: "Couldn't initialize Google Drive. Ensure embedded credentials exist or place credentials.json in the OAuth folder.",
+			});
+			return null;
+		}
+		const loopUrl = await window.electronAPI.cloud.googleStartLoopbackAuth?.();
+		console.log("[CloudSync] Google: ensure auth URL - obtained", loopUrl);
+		if (!loopUrl) return null;
+		setGoogleAuthUrl(loopUrl);
+		return loopUrl;
+	};
+
+	const copyGoogleAuthLink = async () => {
+		try {
+			const url = googleAuthUrl ?? (await ensureGoogleAuthUrl());
+			if (!url) return;
+			console.log("[CloudSync] Google: copying auth URL");
+			const copied = await window.electronAPI.system.copyToClipboard?.(url);
+			console.log("[CloudSync] Google: copy result", copied);
+			setSyncMessage({
+				type: "info",
+				text: "Authorization link copied to clipboard. Paste it into your browser.",
+			});
+		} catch (e) {
+			console.error("Copy failed", e);
+			setSyncMessage({
+				type: "error",
+				text: "Couldn't copy the link. You can click Connect again to regenerate it.",
+			});
+		}
+	};
+
 	const handleGoogleSetup = () => {
 		setShowGoogleSetup(true);
 		(async () => {
@@ -260,13 +340,11 @@ const CloudSync: React.FC = () => {
 				}
 				if (hasFile) {
 					const ok = await startGoogleLoopbackFlow();
-					if (!ok) {
-						// If automatic flow didn't complete, keep waiting UI so user can click Connect again
-						setAuthStep("waiting");
-					}
-					return;
+					if (!ok) return; // startGoogleLoopbackFlow already sets the proper step and message
 				}
-				setAuthStep("credentials");
+				if (!hasFile) {
+					setAuthStep("credentials");
+				}
 			} catch {
 				setAuthStep("credentials");
 			}
@@ -289,22 +367,41 @@ const CloudSync: React.FC = () => {
 		}
 	};
 
-	// Dropbox: automatic connect using token file (no user input)
+	// Dropbox connect: prefer embedded OAuth; fallback to token file
 	const attemptDropboxConnect = async () => {
 		try {
 			setDropboxSucceeded(false);
 			setDropboxInProgress(true);
-			let hasFile = await window.electronAPI.cloud.dropboxHasTokenFile?.();
-			if (
-				!hasFile &&
-				!isProduction &&
-				window.electronAPI.cloud.dropboxBootstrapToken
-			) {
-				hasFile = await window.electronAPI.cloud.dropboxBootstrapToken();
-			}
 			let ok = false;
-			if (hasFile) {
-				ok = (await window.electronAPI.cloud.dropboxInit?.()) ?? false;
+			const mode =
+				dropboxSource ||
+				(await window.electronAPI.cloud.dropboxCredentialsSource?.());
+			console.log("[CloudSync] Dropbox: connect mode", mode);
+			if (mode === "embedded") {
+				const loopUrl =
+					await window.electronAPI.cloud.dropboxStartLoopbackAuth?.();
+				if (loopUrl) {
+					setDropboxAuthUrl(loopUrl);
+					console.log("[CloudSync] Dropbox: loopback URL", loopUrl);
+					console.log("[CloudSync] Dropbox: opening external URL");
+					await window.electronAPI.cloud.openExternalUrl(loopUrl);
+					console.log("[CloudSync] Dropbox: waiting for loopback to complete");
+					ok =
+						(await window.electronAPI.cloud.dropboxWaitLoopback?.()) ?? false;
+					console.log("[CloudSync] Dropbox: loopback result", ok);
+				}
+			} else {
+				let hasFile = await window.electronAPI.cloud.dropboxHasTokenFile?.();
+				if (
+					!hasFile &&
+					!isProduction &&
+					window.electronAPI.cloud.dropboxBootstrapToken
+				) {
+					hasFile = await window.electronAPI.cloud.dropboxBootstrapToken();
+				}
+				if (hasFile) {
+					ok = (await window.electronAPI.cloud.dropboxInit?.()) ?? false;
+				}
 			}
 			setDropboxInProgress(false);
 			if (ok) {
@@ -321,7 +418,10 @@ const CloudSync: React.FC = () => {
 			} else {
 				setSyncMessage({
 					type: "error",
-					text: "Couldn't connect to Dropbox. Ensure dropbox.json exists in the OAuth folder and try again.",
+					text:
+						dropboxSource === "embedded"
+							? "Couldn't finish Dropbox authorization. Please retry."
+							: "Couldn't connect to Dropbox. Ensure dropbox.json exists in the OAuth folder and try again.",
 				});
 			}
 		} catch (e) {
@@ -337,6 +437,38 @@ const CloudSync: React.FC = () => {
 		setTimeout(() => {
 			attemptDropboxConnect();
 		}, 0);
+	};
+
+	// Ensure Dropbox auth URL exists when using embedded OAuth
+	const ensureDropboxAuthUrl = async (): Promise<string | null> => {
+		if (dropboxAuthUrl) return dropboxAuthUrl;
+		if (dropboxSource !== "embedded") return null;
+		console.log("[CloudSync] Dropbox: ensure auth URL - starting loopback");
+		const loopUrl = await window.electronAPI.cloud.dropboxStartLoopbackAuth?.();
+		console.log("[CloudSync] Dropbox: ensure auth URL - obtained", loopUrl);
+		if (!loopUrl) return null;
+		setDropboxAuthUrl(loopUrl);
+		return loopUrl;
+	};
+
+	const copyDropboxAuthLink = async () => {
+		try {
+			const url = dropboxAuthUrl ?? (await ensureDropboxAuthUrl());
+			if (!url) return;
+			console.log("[CloudSync] Dropbox: copying auth URL");
+			const copied = await window.electronAPI.system.copyToClipboard?.(url);
+			console.log("[CloudSync] Dropbox: copy result", copied);
+			setSyncMessage({
+				type: "info",
+				text: "Authorization link copied to clipboard. Paste it into your browser.",
+			});
+		} catch (e) {
+			console.error("Copy failed", e);
+			setSyncMessage({
+				type: "error",
+				text: "Couldn't copy the link. Click Connect to regenerate it.",
+			});
+		}
 	};
 
 	// OneDrive Setup (kept for potential future re-enable)
@@ -416,7 +548,7 @@ const CloudSync: React.FC = () => {
 								style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
 							>
 								<img
-									src="/drive.svg"
+									src={`${import.meta.env.BASE_URL}drive.svg`}
 									alt="Google Drive"
 									width={20}
 									height={20}
@@ -476,7 +608,7 @@ const CloudSync: React.FC = () => {
 								style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
 							>
 								<img
-									src="/dropbox.svg"
+									src={`${import.meta.env.BASE_URL}dropbox.svg`}
 									alt="Dropbox"
 									width={20}
 									height={20}
@@ -584,7 +716,28 @@ const CloudSync: React.FC = () => {
 
 						{authStep === "credentials" && (
 							<div className="setup-step">
-								{!isProduction ? (
+								{credentialsSource === "embedded" ? (
+									<>
+										<p>
+											A built-in Google Drive client is available. Click Connect
+											to open your browser and sign in.
+										</p>
+										<div className="modal-actions">
+											<button
+												className="btn btn-secondary"
+												onClick={() => setShowGoogleSetup(false)}
+											>
+												Cancel
+											</button>
+											<button
+												className="btn btn-primary"
+												onClick={startGoogleLoopbackFlow}
+											>
+												Connect
+											</button>
+										</div>
+									</>
+								) : !isProduction ? (
 									<>
 										<p>
 											To connect Google Drive in development, place your OAuth
@@ -625,7 +778,7 @@ const CloudSync: React.FC = () => {
 									>
 										Cancel
 									</button>
-									{isProduction && (
+									{credentialsSource !== "embedded" && isProduction && (
 										<button
 											className="btn btn-outline"
 											onClick={async () => {
@@ -670,7 +823,7 @@ const CloudSync: React.FC = () => {
 											}
 										}}
 									>
-										Rescan
+										{credentialsSource === "embedded" ? "Connect" : "Rescan"}
 									</button>
 								</div>
 							</div>
@@ -696,12 +849,100 @@ const CloudSync: React.FC = () => {
 										</>
 									)}
 								</div>
-								<div className="modal-actions">
+								{!googleAuthSucceeded && (
+									<div style={{ margin: "8px 0 16px", fontSize: 13 }}>
+										<a
+											href="#"
+											onClick={(e) => {
+												e.preventDefault();
+												setGoogleManualMode((v) => !v);
+											}}
+										>
+											{googleManualMode
+												? "Hide manual code entry"
+												: "Enter code manually"}
+										</a>
+									</div>
+								)}
+								{googleManualMode && !googleAuthSucceeded && (
+									<div
+										style={{
+											display: "flex",
+											gap: 8,
+											justifyContent: "center",
+										}}
+									>
+										<input
+											type="text"
+											placeholder="Paste code from browser"
+											value={googleAuthCode}
+											onChange={(e) => setGoogleAuthCode(e.target.value)}
+											style={{ width: 280 }}
+										/>
+										<button
+											className="btn btn-primary"
+											onClick={async () => {
+												if (!googleAuthCode.trim()) return;
+												console.log(
+													"[CloudSync] Google: submitting manual code"
+												);
+												const ok =
+													await window.electronAPI.cloud.googleSetAuthCode(
+														googleAuthCode.trim()
+													);
+												console.log(
+													"[CloudSync] Google: manual code result",
+													ok
+												);
+												if (ok) {
+													setGoogleAuthSucceeded(true);
+													setSyncMessage({
+														type: "success",
+														text: "✅ Google Drive connected successfully!",
+													});
+													await loadCloudStatus();
+													setTimeout(() => {
+														setShowGoogleSetup(false);
+														setGoogleAuthSucceeded(false);
+													}, 900);
+												} else {
+													setSyncMessage({
+														type: "error",
+														text: "Couldn't complete authorization with the provided code.",
+													});
+												}
+											}}
+										>
+											Submit code
+										</button>
+									</div>
+								)}
+								<div
+									className="modal-actions"
+									style={{ gap: 8, display: "flex" }}
+								>
 									<button
 										className="btn btn-secondary"
 										onClick={() => setShowGoogleSetup(false)}
 									>
 										Cancel
+									</button>
+									<button
+										className="btn btn-outline"
+										onClick={async () => {
+											const url = await ensureGoogleAuthUrl();
+											if (!url) {
+												setSyncMessage({
+													type: "error",
+													text: "Couldn't prepare the authorization link. Please try Connect again.",
+												});
+												return;
+											}
+											await copyGoogleAuthLink();
+										}}
+										disabled={googleAuthInProgress && !googleAuthSucceeded}
+									>
+										Copy link
 									</button>
 									<button
 										className="btn btn-primary"
@@ -735,7 +976,11 @@ const CloudSync: React.FC = () => {
 								) : (
 									<>
 										<RefreshCw size={24} className={"spinning"} />
-										<p>Connecting to Dropbox…</p>
+										<p>
+											{dropboxSource === "embedded"
+												? "Waiting for authorization…"
+												: "Connecting to Dropbox…"}
+										</p>
 									</>
 								)}
 							</div>
@@ -746,6 +991,25 @@ const CloudSync: React.FC = () => {
 								>
 									Cancel
 								</button>
+								{dropboxSource === "embedded" && (
+									<button
+										className="btn btn-outline"
+										onClick={async () => {
+											const url = await ensureDropboxAuthUrl();
+											if (!url) {
+												setSyncMessage({
+													type: "error",
+													text: "Couldn't prepare the authorization link. Please try Connect again.",
+												});
+												return;
+											}
+											await copyDropboxAuthLink();
+										}}
+										disabled={dropboxInProgress && !dropboxSucceeded}
+									>
+										Copy link
+									</button>
+								)}
 								<button
 									className="btn btn-primary"
 									onClick={attemptDropboxConnect}

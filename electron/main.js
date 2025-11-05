@@ -1,4 +1,11 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+const {
+	app,
+	BrowserWindow,
+	ipcMain,
+	dialog,
+	shell,
+	clipboard,
+} = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const Database = require("./database.js");
@@ -643,16 +650,28 @@ ipcMain.handle("cloud-get-status", async () => {
 
 // Google Drive authentication
 ipcMain.handle("cloud-google-init", async (_, credentials) => {
-	return await cloudService.initGoogleDrive(credentials);
+	const ok = await cloudService.initGoogleDrive(credentials);
+	try {
+		console.log("[main] cloud-google-init =>", ok);
+	} catch {}
+	return ok;
 });
 
 // Helper endpoints for automatic credentials discovery
 ipcMain.handle("cloud-google-has-creds", async () => {
-	return cloudService.hasGoogleCredentialsFile();
+	const has = cloudService.hasGoogleCredentialsFile();
+	try {
+		console.log("[main] cloud-google-has-creds =>", has);
+	} catch {}
+	return has;
 });
 
 ipcMain.handle("cloud-google-creds-dir", async () => {
-	return cloudService.getGoogleCredentialsDir();
+	const dir = cloudService.getGoogleCredentialsDir();
+	try {
+		console.log("[main] cloud-google-creds-dir =>", dir);
+	} catch {}
+	return dir;
 });
 
 ipcMain.handle("cloud-google-open-creds-dir", async () => {
@@ -683,7 +702,11 @@ ipcMain.handle("cloud-google-get-auth-url", async () => {
 // Start loopback auth server and return auth URL
 ipcMain.handle("cloud-google-start-loopback-auth", async () => {
 	try {
+		console.log(
+			"[main] cloud-google-start-loopback-auth: calling startGoogleLoopbackAuth"
+		);
 		const url = await cloudService.startGoogleLoopbackAuth();
+		console.log("[main] cloud-google-start-loopback-auth: got URL:", url);
 		return url;
 	} catch (error) {
 		console.error("Error starting Google loopback auth:", error);
@@ -708,6 +731,20 @@ ipcMain.handle("cloud-google-set-auth-code", async (_, code) => {
 ipcMain.handle("cloud-google-disconnect", async () => {
 	cloudService.disconnectGoogleDrive();
 	return true;
+});
+
+// Return where Google credentials come from: 'embedded', 'user', or 'none'
+ipcMain.handle("cloud-google-credentials-source", async () => {
+	try {
+		const src = cloudService.getGoogleCredentialsSource();
+		try {
+			console.log("[main] cloud-google-credentials-source =>", src);
+		} catch {}
+		return src;
+	} catch (e) {
+		console.error("Error getting credentials source:", e);
+		return "none";
+	}
 });
 
 // OneDrive authentication
@@ -787,6 +824,34 @@ ipcMain.handle("cloud-dropbox-disconnect", async () => {
 	return true;
 });
 
+// Dropbox OAuth (PKCE) using embedded app config
+ipcMain.handle("cloud-dropbox-credentials-source", async () => {
+	try {
+		return cloudService.getDropboxCredentialsSource?.() || "none";
+	} catch (e) {
+		console.error("Error getting Dropbox credentials source:", e);
+		return "none";
+	}
+});
+
+ipcMain.handle("cloud-dropbox-start-loopback-auth", async () => {
+	try {
+		return await cloudService.startDropboxLoopbackAuth?.();
+	} catch (e) {
+		console.error("Error starting Dropbox loopback auth:", e);
+		return null;
+	}
+});
+
+ipcMain.handle("cloud-dropbox-wait-loopback", async () => {
+	try {
+		return await cloudService.waitDropboxLoopbackAuthComplete?.();
+	} catch (e) {
+		console.error("Error waiting for Dropbox loopback auth:", e);
+		return false;
+	}
+});
+
 // Sync operations
 ipcMain.handle("cloud-sync-now", async () => {
 	try {
@@ -851,8 +916,23 @@ ipcMain.handle("cloud-set-auto-sync", async (_, enabled) => {
 
 // Open external URLs for OAuth
 ipcMain.handle("open-external-url", async (_, url) => {
+	try {
+		console.log("[main] open-external-url invoked:", url);
+	} catch {}
 	await shell.openExternal(url);
 	return true;
+});
+
+// Clipboard write for copy-link operations
+ipcMain.handle("clipboard-write", async (_evt, text) => {
+	try {
+		console.log("[main] clipboard-write invoked, length:", (text || "").length);
+		clipboard.writeText(String(text || ""));
+		return true;
+	} catch (e) {
+		console.error("clipboard-write failed:", e);
+		return false;
+	}
 });
 
 // Fetch sync history
